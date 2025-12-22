@@ -1,0 +1,15 @@
+# Secrets
+.env
+
+# Common noise
+.DS_Store
+Thumbs.db
+
+# Logs / temp
+*.log
+tmp/
+storage/
+
+# IDE
+.vscode/
+.idea/
