@@ -146,10 +146,14 @@ try {
         $custBatch = (int)($_GET['cust_batch'] ?? 200);
         if ($custBatch <= 0) $custBatch = 200;
 
+        // IMPORTANT:
+        // On the server, Apache DocumentRoot is /var/www/mcpserver/public,
+        // so sync endpoints are reachable under /sync/* (not /mcpserver/public/sync/*).
+
         // 1) Active items upsert
         echo "1) Running GetAllActiveItems sync...\n";
         echo "----------------------------------------\n";
-        echo callLocal('/mcpserver/public/sync/get-all-active-items.php', [
+        echo callLocal('/sync/get-all-active-items.php', [
             'SYNC_TOKEN' => $token,
             'batch' => $itemsBatch,
         ]);
@@ -157,14 +161,14 @@ try {
         // 2) Deleted items marker
         echo "\n\n2) Running Deleted Items marker...\n";
         echo "----------------------------------------\n";
-        echo callLocal('/mcpserver/public/sync/get-deleted-active-items.php', [
+        echo callLocal('/sync/get-deleted-active-items.php', [
             'SYNC_TOKEN' => $token,
         ]);
 
         // 3) Customers sync
         echo "\n\n3) Running Customers sync...\n";
         echo "----------------------------------------\n";
-        echo callLocal('/mcpserver/public/sync/get-all-customers.php', [
+        echo callLocal('/sync/get-all-customers.php', [
             'SYNC_TOKEN' => $token,
             'batch' => $custBatch,
         ]);
