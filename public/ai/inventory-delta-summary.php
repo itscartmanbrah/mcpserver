@@ -16,6 +16,7 @@ try {
 
     $minAbsDelta = (string)($_GET['min_abs_delta'] ?? '0.0001');
     if (!is_numeric($minAbsDelta)) $minAbsDelta = '0.0001';
+    $minAbsDeltaFloat = (float)$minAbsDelta;
 
     if (!in_array($scope, ['today', 'hours'], true)) {
         http_response_code(400);
@@ -28,15 +29,40 @@ try {
     // Define time window based on sync_runs.started_at
     if ($scope === 'today') {
         $timeSql = "sr.started_at >= CURDATE()";
-        $params = [];
+        $timeParamsRuns = [];
+        $timeParamsDeltas = [];
         $windowLabel = 'today';
     } else {
         $timeSql = "sr.started_at >= (NOW() - INTERVAL ? HOUR)";
-        $params = [$hours];
+        $timeParamsRuns = [$hours];
+        $timeParamsDeltas = [$hours];
         $windowLabel = "last_{$hours}_hours";
     }
 
-    // Row-level summary of deltas over all successful runs in window
+    /* =========================================================
+       Runs considered (all successful runs in window)
+       ========================================================= */
+    $sqlRuns = "
+        SELECT
+            COUNT(*) AS runs_considered_count,
+            MIN(sr.id) AS first_to_run_id,
+            MAX(sr.id) AS last_to_run_id,
+            MIN(sr.started_at) AS first_run_started_at,
+            MAX(sr.started_at) AS last_run_started_at
+        FROM sync_runs sr
+        WHERE
+            sr.job_name = 'sync-active-items-latest'
+            AND sr.status = 'success'
+            AND {$timeSql}
+    ";
+
+    $stmt = $pdo->prepare($sqlRuns);
+    $stmt->execute($timeParamsRuns);
+    $runsRow = $stmt->fetch() ?: [];
+
+    /* =========================================================
+       Row-level summary (movement rows only)
+       ========================================================= */
     $sql = "
         SELECT
             COUNT(*) AS total_rows,
@@ -47,30 +73,24 @@ try {
             SUM(CASE WHEN d.delta < 0 THEN ABS(d.delta) ELSE 0 END) AS total_units_decreased,
             SUM(CASE WHEN d.delta > 0 THEN d.delta ELSE 0 END) AS total_units_increased,
 
-            MIN(sr.started_at) AS first_run_started_at,
-            MAX(sr.started_at) AS last_run_started_at,
-            COUNT(DISTINCT d.to_sync_run_id) AS runs_count,
-            MIN(d.to_sync_run_id) AS first_to_run_id,
-            MAX(d.to_sync_run_id) AS last_to_run_id
+            COUNT(DISTINCT d.to_sync_run_id) AS movement_runs_count
         FROM eweb_inventory_deltas d
         INNER JOIN sync_runs sr ON sr.id = d.to_sync_run_id
         WHERE
             sr.job_name = 'sync-active-items-latest'
             AND sr.status = 'success'
             AND {$timeSql}
-            AND (ABS(d.delta) >= ? OR d.delta = 0)
+            AND ABS(d.delta) >= ?
     ";
 
-    // We include the ABS(delta) >= minAbsDelta filter in the totals for pos/neg,
-    // but allow d.delta=0 to keep row accounting consistent when minAbsDelta > 0.
-    // If you want zeros excluded entirely, pass min_abs_delta > 0 and rely on the counts below.
     $stmt = $pdo->prepare($sql);
-    $params[] = (float)$minAbsDelta;
+    $params = array_merge($timeParamsDeltas, [$minAbsDeltaFloat]);
     $stmt->execute($params);
     $row = $stmt->fetch() ?: [];
 
-    // SKU-level summary across the window:
-    // net change per SKU, then count which SKUs decreased/increased/no change.
+    /* =========================================================
+       SKU-level summary (net per SKU over the window)
+       ========================================================= */
     $sqlSku = "
         SELECT
             COUNT(*) AS sku_count,
@@ -94,11 +114,7 @@ try {
     ";
 
     $stmt = $pdo->prepare($sqlSku);
-    $paramsSku = [];
-    if ($scope === 'hours') {
-        $paramsSku[] = $hours;
-    }
-    $paramsSku[] = (float)$minAbsDelta;
+    $paramsSku = array_merge($timeParamsDeltas, [$minAbsDeltaFloat]);
     $stmt->execute($paramsSku);
     $skuRow = $stmt->fetch() ?: [];
 
@@ -106,7 +122,7 @@ try {
         'ok' => true,
         'scope' => $scope,
         'window' => $windowLabel,
-        'min_abs_delta' => (float)$minAbsDelta,
+        'min_abs_delta' => $minAbsDeltaFloat,
 
         'rows' => [
             'total_rows' => (int)($row['total_rows'] ?? 0),
@@ -127,11 +143,12 @@ try {
         ],
 
         'runs' => [
-            'runs_count' => (int)($row['runs_count'] ?? 0),
-            'first_to_run_id' => (int)($row['first_to_run_id'] ?? 0),
-            'last_to_run_id' => (int)($row['last_to_run_id'] ?? 0),
-            'first_run_started_at' => (string)($row['first_run_started_at'] ?? ''),
-            'last_run_started_at' => (string)($row['last_run_started_at'] ?? ''),
+            'runs_considered_count' => (int)($runsRow['runs_considered_count'] ?? 0),
+            'movement_runs_count' => (int)($row['movement_runs_count'] ?? 0),
+            'first_to_run_id' => (int)($runsRow['first_to_run_id'] ?? 0),
+            'last_to_run_id' => (int)($runsRow['last_to_run_id'] ?? 0),
+            'first_run_started_at' => (string)($runsRow['first_run_started_at'] ?? ''),
+            'last_run_started_at' => (string)($runsRow['last_run_started_at'] ?? ''),
         ],
 
         'disclaimer' => "“Sales” are inferred from inventory decreases (QOH deltas). This may include non-sale adjustments.",
