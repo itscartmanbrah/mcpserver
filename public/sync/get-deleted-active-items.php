@@ -1,6 +1,13 @@
 <?php
 declare(strict_types=1);
 
+// Allow CLI invocation:
+// php file.php SYNC_TOKEN=... batch=...
+if (PHP_SAPI === 'cli' && empty($_GET) && isset($argv)) {
+    parse_str(implode('&', array_slice($argv, 1)), $_GET);
+}
+
+
 set_time_limit(0);
 header('Content-Type: text/plain; charset=utf-8');
 

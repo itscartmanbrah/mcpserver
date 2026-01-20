@@ -2,7 +2,7 @@
 declare(strict_types=1);
 
 // Allow CLI invocation:
-// php sync-active-items-latest.php SYNC_TOKEN=... batch=50 cust_batch=200 snap_batch=1000
+// php sync-active-items-latest.php SYNC_TOKEN=... batch=50 cust_batch=200
 if (PHP_SAPI === 'cli' && empty($_GET) && isset($argv)) {
     parse_str(implode('&', array_slice($argv, 1)), $_GET);
 }
@@ -149,11 +149,10 @@ try {
 
     // Absolute paths to child scripts
     $syncDir = __DIR__;
-    $scriptActiveItems    = $syncDir . '/get-all-active-items.php';
-    $scriptDeletedItems   = $syncDir . '/get-deleted-active-items.php';
-    $scriptCustomers      = $syncDir . '/get-all-customers.php';
-    $scriptSnapshot       = $syncDir . '/snapshot-inventory.php';
-    $scriptComputeDeltas  = $syncDir . '/compute-inventory-deltas.php';
+    $scriptActiveItems  = $syncDir . '/get-all-active-items.php';
+    $scriptDeletedItems = $syncDir . '/get-deleted-active-items.php';
+    $scriptCustomers    = $syncDir . '/get-all-customers.php';
+    $scriptSnapshot     = $syncDir . '/snapshot-inventory.php';
 
     // 1) Active items upsert
     echo "1) Running GetAllActiveItems sync...\n";
@@ -178,21 +177,13 @@ try {
         'batch' => $custBatch,
     ]);
 
-    // 4) Inventory snapshot
+    // 4) Inventory snapshot (NEW)
     echo "\n\n4) Capturing Inventory snapshot...\n";
     echo "----------------------------------------\n";
     echo callCli($scriptSnapshot, [
         'SYNC_TOKEN'  => $token,
         'sync_run_id' => $runId,
         'batch'       => $snapshotBatch,
-    ]);
-
-    // 5) Inventory deltas
-    echo "\n\n5) Computing Inventory deltas...\n";
-    echo "----------------------------------------\n";
-    echo callCli($scriptComputeDeltas, [
-        'SYNC_TOKEN'     => $token,
-        'to_sync_run_id' => $runId,
     ]);
 
     syncRunFinish($pdo, $runId, 'success', 'OK');
@@ -206,3 +197,4 @@ try {
 } finally {
     releaseSyncLock($pdo, $lockName);
 }
+

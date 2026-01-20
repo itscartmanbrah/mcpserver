@@ -1,0 +1,125 @@
+<?php
+declare(strict_types=1);
+
+// Allow CLI invocation:
+// php snapshot-inventory.php SYNC_TOKEN=... sync_run_id=123 batch=1000
+if (PHP_SAPI === 'cli' && empty($_GET) && isset($argv)) {
+    parse_str(implode('&', array_slice($argv, 1)), $_GET);
+}
+
+set_time_limit(0);
+header('Content-Type: text/plain; charset=utf-8');
+
+require __DIR__ . '/../../src/Bootstrap.php';
+
+use App\Support\Db;
+
+$token = (string)($_GET['SYNC_TOKEN'] ?? ($_GET['token'] ?? ''));
+$expected = (string)(getenv('SYNC_TOKEN') ?: '');
+
+if ($expected === '' || $token === '' || !hash_equals($expected, $token)) {
+    http_response_code(403);
+    fwrite(STDERR, "Forbidden\n");
+    exit(1);
+}
+
+$syncRunId = (int)($_GET['sync_run_id'] ?? 0);
+if ($syncRunId <= 0) {
+    http_response_code(400);
+    exit("Missing or invalid sync_run_id\n");
+}
+
+$batchSize = (int)($_GET['batch'] ?? 1000);
+if ($batchSize < 100 || $batchSize > 5000) {
+    $batchSize = 1000;
+}
+
+echo "SNAPSHOT INVENTORY\n";
+echo "Run ID: {$syncRunId}\n";
+echo "Batch: {$batchSize}\n";
+echo "Started: " . date('Y-m-d H:i:s') . "\n\n";
+
+$pdo = Db::pdo();
+
+try {
+    // Ensure sync run exists (and optionally is "running" / any status you like)
+    $stmt = $pdo->prepare('SELECT id, status FROM sync_runs WHERE id = ? LIMIT 1');
+    $stmt->execute([$syncRunId]);
+    $run = $stmt->fetch();
+
+    if (!$run) {
+        throw new RuntimeException("sync_runs row not found for id={$syncRunId}");
+    }
+
+    // Single captured_at timestamp for the entire snapshot run (consistent point-in-time)
+    $capturedAt = (new DateTimeImmutable('now'))->format('Y-m-d H:i:s');
+
+    // Count rows to snapshot
+    $countStmt = $pdo->query("SELECT COUNT(*) FROM eweb_active_items WHERE is_deleted = 0");
+    $total = (int)$countStmt->fetchColumn();
+
+    echo "Active SKUs to snapshot: {$total}\n";
+    echo "Captured at: {$capturedAt}\n\n";
+
+    $insert = $pdo->prepare("
+        INSERT INTO eweb_inventory_snapshots (sync_run_id, sku, qoh, captured_at)
+        VALUES (:run_id, :sku, :qoh, :captured_at)
+        ON DUPLICATE KEY UPDATE
+            qoh = VALUES(qoh),
+            captured_at = VALUES(captured_at)
+    ");
+
+    $select = $pdo->prepare("
+        SELECT sku, TotalAvailQOH
+        FROM eweb_active_items
+        WHERE is_deleted = 0
+        ORDER BY sku
+        LIMIT :limit OFFSET :offset
+    ");
+
+    $pdo->beginTransaction();
+
+    $processed = 0;
+    $offset = 0;
+
+    while ($offset < $total) {
+        $select->bindValue(':limit', $batchSize, PDO::PARAM_INT);
+        $select->bindValue(':offset', $offset, PDO::PARAM_INT);
+        $select->execute();
+
+        $rows = $select->fetchAll();
+        if (!$rows) break;
+
+        foreach ($rows as $r) {
+            $sku = (string)($r['sku'] ?? '');
+            if ($sku === '') continue;
+
+            // TotalAvailQOH should be numeric; coerce safely
+            $qohRaw = $r['TotalAvailQOH'] ?? 0;
+            $qoh = is_numeric($qohRaw) ? (string)$qohRaw : '0';
+
+            $insert->execute([
+                'run_id' => $syncRunId,
+                'sku' => $sku,
+                'qoh' => $qoh,
+                'captured_at' => $capturedAt,
+            ]);
+
+            $processed++;
+        }
+
+        $offset += $batchSize;
+        echo "Progress: {$processed}/{$total}\n";
+    }
+
+    $pdo->commit();
+
+    echo "\nDONE\n";
+    echo "Snapshotted: {$processed}\n";
+} catch (Throwable $e) {
+    if ($pdo->inTransaction()) $pdo->rollBack();
+    http_response_code(500);
+
+    fwrite(STDERR, "FAILED: " . $e->getMessage() . "\n");
+    exit(1);
+}
