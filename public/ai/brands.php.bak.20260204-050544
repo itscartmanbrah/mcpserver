@@ -1,0 +1,40 @@
+<?php
+declare(strict_types=1);
+header('Content-Type: application/json; charset=utf-8');
+
+require __DIR__ . '/_lib.php';
+ai_auth_gate();
+
+try {
+    $limit = ai_limit(500);
+    $pdo = ai_db();
+
+    $sql = "
+      SELECT
+        ai.BrandID AS brand_id,
+        COUNT(*) AS sku_count,
+        SUM(COALESCE(ai.TotalAvailQOH, 0)) AS total_qoh
+      FROM eweb_active_items ai
+      WHERE ai.is_deleted = 0
+        AND ai.BrandID IS NOT NULL
+        AND ai.BrandID <> ''
+      GROUP BY ai.BrandID
+      ORDER BY sku_count DESC
+      LIMIT {$limit}
+    ";
+
+    $rows = $pdo->query($sql)->fetchAll();
+
+    ai_json_out([
+        'count' => count($rows),
+        'brands' => array_map(fn($r) => [
+            'brand_id' => (string)$r['brand_id'],
+            'sku_count' => (int)$r['sku_count'],
+            'total_qoh' => (float)$r['total_qoh'],
+        ], $rows),
+    ], 200);
+
+} catch (Throwable $e) {
+    error_log('[brands] ERROR: ' . $e->getMessage());
+    ai_json_out(['error' => 'Server error', 'detail' => $e->getMessage()], 500);
+}

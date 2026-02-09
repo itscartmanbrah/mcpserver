@@ -1,0 +1,1 @@
+/var/www/mcpserver/public/ai/inventory-changes-today.php
