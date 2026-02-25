@@ -6,8 +6,12 @@ require __DIR__ . '/_lib.php';
 // Output CSV
 header('Content-Type: text/csv; charset=utf-8');
 
-header('Content-Disposition: attachment; filename="pandora_order.csv"');
-header('Content-Disposition: attachment; filename="pandora_order.csv"');
+$tzName = getenv('REPORT_TZ') ?: 'Australia/Melbourne';
+$tz = new DateTimeZone($tzName);
+$now = new DateTimeImmutable('now', $tz);
+
+$filename = 'pandora_order_' . $now->format('Y-m-d') . '.csv';
+header('Content-Disposition: attachment; filename="' . $filename . '"');
 
 try {
     $pdo = ai_db();
