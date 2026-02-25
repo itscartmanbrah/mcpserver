@@ -122,3 +122,61 @@ function ai_sku_join_on(string $leftExpr, string $rightExpr): string {
 function ai_note(): string {
     return 'Sales are inferred from inventory decreases (delta < 0). This may include adjustments, transfers, or stock corrections.';
 }
+
+/**
+ * Auth gate that accepts either:
+ * - X-CHAT-TOKEN header (preferred)
+ * - token query param (for direct browser downloads)
+ */
+function ai_auth_gate_allow_query_token(): void
+{
+    $expected = trim((string)(getenv("X_CHAT_TOKEN") ?: ($_ENV["X_CHAT_TOKEN"] ?? "")));
+    if ($expected === '') {
+        ai_json_out(['error' => 'Server misconfigured'], 500);
+    }
+
+    $hdr = '';
+    if (isset($_SERVER['HTTP_X_CHAT_TOKEN'])) {
+        $hdr = trim((string)$_SERVER['HTTP_X_CHAT_TOKEN']);
+    }
+
+    $q = '';
+    if (isset($_GET['token'])) {
+        $q = trim((string)$_GET['token']);
+    }
+
+    $ok = false;
+    if ($hdr !== '') {
+        $ok = hash_equals($expected, $hdr);
+    } elseif ($q !== '') {
+        $ok = hash_equals($expected, $q);
+    }
+
+    if (!$ok) {
+        ai_json_out(['error' => 'Unauthorized'], 401);
+    }
+}
+
+/**
+ * Auth gate that accepts either:
+ * - X-CHAT-TOKEN header (preferred)
+ * - token query param (for direct browser downloads)
+ */
+
+/**
+ * Auth gate that accepts either:
+ * - X-CHAT-TOKEN header (preferred)
+ * - token query param (for direct browser downloads)
+ */
+
+/**
+ * Allow browser-click downloads by accepting ?token=... and mapping it to the normal header gate.
+ * Uses the existing ai_auth_gate() so we don't rely on env/token storage differences.
+ */
+function ai_auth_gate_or_query_token(): void
+{
+    if (isset($_GET['token']) && !isset($_SERVER['HTTP_X_CHAT_TOKEN'])) {
+        $_SERVER['HTTP_X_CHAT_TOKEN'] = (string)$_GET['token'];
+    }
+    ai_auth_gate();
+}
